@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -154,6 +156,36 @@ func ParseToken(tokenStr string) (string, error) {
 	}
 	claims := token.Claims.(jwt.MapClaims)
 	return claims["user_id"].(string), nil
+}
+
+func Handlerefrer() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		refer := ctx.Request.Referer()
+		fmt.Println("this is refer : ==================> ", refer)
+		currentPath := ctx.Request.URL.String()
+		fmt.Println("current path +>>>>>>>>>>>>>>>>>>>>>", currentPath)
+		matched, err := regexp.MatchString(`^http://localhost:8000/projects/[^/]+$`, refer)
+		if err != nil {
+			fmt.Println("regex error ", err)
+			ctx.Next()
+			return
+		}
+		tem := strings.HasPrefix(currentPath, "/assets")
+		if matched && tem {
+
+			println("matched ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+			ctx.Redirect(http.StatusFound, refer+currentPath)
+			ctx.Abort()
+
+			return
+		}
+		// if regexp.MustCompile(`^http://localhost:8000/projects/[^/]+$`).MatchString(refer) {
+		// 	fmt.Println("it is for redirection !!!!!!")
+
+		// 	ctx.Redirect(http.StatusOK, tem)
+		// }
+		ctx.Next()
+	}
 }
 
 func AuthMiddleware() gin.HandlerFunc {
@@ -345,15 +377,6 @@ func isStaticSite(dir string) bool {
 	return err == nil
 }
 
-// // Deploy Node.js application
-//
-//	func deployNodeApp(repoDir, deploymentID string) (string, error) {
-//		// Install dependencies
-//		installCmd := exec.Command("npm", "install")
-//		installCmd.Dir = repoDir
-//		if err := installCmd.Run(); err != nil {
-//			return "", err
-//		}
 func deployNodeApp(repoDir, deploymentID string) (string, error) {
 	// Install dependencies
 	installCmd := exec.Command("npm", "install")
@@ -363,14 +386,14 @@ func deployNodeApp(repoDir, deploymentID string) (string, error) {
 		return "", fmt.Errorf("npm install failed: %v", err)
 	}
 
-	port := 3000 + (time.Now().Unix() % 1000) // Generate a "random" port
+	// Build the application
 	buildCmd := exec.Command("npm", "run", "build")
 	buildCmd.Dir = repoDir
 	fmt.Println("Building project...")
-	buildOutput, err := buildCmd.CombinedOutput()
+	buildOutput, _ := buildCmd.CombinedOutput()
 	fmt.Println("Build output:", string(buildOutput))
 
-	// Determine build directory - Vite uses 'dist', Create React App uses 'build'
+	// Even if build fails, we'll try to find a deployable directory
 	buildDirs := []string{"dist", "build", "public", "out", "_site"}
 	var buildDir string
 	for _, dir := range buildDirs {
@@ -382,46 +405,18 @@ func deployNodeApp(repoDir, deploymentID string) (string, error) {
 		}
 	}
 
-	if err != nil || buildDir == "" {
-		fmt.Println("Build failed or no build directory found, trying to start in dev mode...")
-		startCmd := exec.Command("npm", "start")
-		startCmd.Dir = repoDir
-		startCmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port))
-		if err := startCmd.Start(); err != nil {
-			return "", fmt.Errorf("failed to start dev server: %v", err)
-		}
-	} else {
-		// Serve the built files from the correct build directory
-		fmt.Println("Starting server for build output...")
-		serveCmd := exec.Command("npx", "serve", "-s", buildDir, "-l", fmt.Sprintf("%d", port))
-		serveCmd.Dir = repoDir
-		if err := serveCmd.Start(); err != nil {
-			return "", fmt.Errorf("failed to serve build: %v", err)
+	// If no build directory was found, we'll treat the repo root as the deployable directory
+	if buildDir == "" {
+		fmt.Println("No build directory found, using repository root")
+		// Check if there's an index.html file at the root level
+		indexPath := filepath.Join(repoDir, "index.html")
+		if _, err := os.Stat(indexPath); err != nil {
+			fmt.Println("Warning: No index.html found at root level")
 		}
 	}
 
-	// Create a redirector in the deployments directory
-	htmlContent := fmt.Sprintf(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta http-equiv="refresh" content="0;url=http://localhost:%d">
-            <title>Redirecting to deployed app</title>
-        </head>
-        <body>
-            <p>Redirecting to your deployed application...</p>
-            <p><a href="http://localhost:%d">Click here if you are not redirected</a></p>
-        </body>
-        </html>
-    `, port, port)
-
-	redirectPath := filepath.Join(deploymentRootDir, deploymentID, "index.html")
-	err = os.WriteFile(redirectPath, []byte(htmlContent), 0644)
-	if err != nil {
-		fmt.Println("Warning: Could not create redirect file:", err)
-	}
-
-	return fmt.Sprintf("http://localhost:%d", port), nil
+	// Return the URL where the project will be accessible
+	return fmt.Sprintf("http://localhost:8000/projects/%s", deploymentID), nil
 }
 
 // 	port := 3000 + (time.Now().Unix() % 1000)
