@@ -19,14 +19,14 @@ import (
 var (
 	jwtKey            = []byte("supersecretkey")
 	githubOauthConfig = &oauth2.Config{
-		ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
-		ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
+		ClientID:     "Iv23ctotRij7SyaLQ3lZ",
+		ClientSecret: "c022f6f74cbad6f19b239f30c8dfeac2726b21b7",
 		Scopes:       []string{"repo"},
 		Endpoint:     ghoauth.Endpoint,
 		RedirectURL:  "http://localhost:8000/github/callback",
 	}
 	state             = "randomstate"
-	deploymentRootDir = "deployments"
+	deploymentRootDir = "Deployed"
 )
 
 func main() {
@@ -43,7 +43,6 @@ func main() {
 		AllowCredentials: true,
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
 	}))
-	r.Use(Handlerefrer())
 
 	r.GET("/github/login", githubLogin)
 	r.GET("/github/callback", githubCallback)
@@ -61,7 +60,6 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"msg": "You are authenticated!"})
 	})
 
-	// List all deployed frontend projects
 	r.GET("/deployed-projects", func(c *gin.Context) {
 		entries, err := os.ReadDir(deploymentRootDir)
 		if err != nil {
@@ -76,7 +74,6 @@ func main() {
 				projectName := entry.Name()
 				projectPath := filepath.Join(deploymentRootDir, projectName)
 
-				// Check for common build output directories
 				buildDirs := []string{"dist", "build", "public", "out", "_site"}
 				var buildDir string
 
@@ -88,9 +85,7 @@ func main() {
 					}
 				}
 
-				// If none of the standard directories exist, use the project directory itself
 				if buildDir == "" {
-					// At least check if there's an index.html file somewhere
 					indexPath := findIndexHTML(projectPath)
 					if indexPath != "" {
 						buildDir = filepath.Dir(indexPath[len(projectPath)+1:])
@@ -118,6 +113,8 @@ func main() {
 		project := c.Param("projectName")
 		requestedPath := c.Param("filepath")
 
+		cleanProjectName := strings.Split(project, "-")[0]
+
 		if requestedPath == "/" || requestedPath == "" {
 			requestedPath = "/index.html"
 		}
@@ -125,31 +122,377 @@ func main() {
 		fmt.Println("Requested project:", project)
 		fmt.Println("Requested path:", requestedPath)
 
-		projectRoot := filepath.Join(deploymentRootDir, project)
-		distPath := filepath.Join(projectRoot, "dist")
-		if _, err := os.Stat(distPath); err == nil {
-			fmt.Println("Dist directory exists")
-			// List contents of assets if it exists
-			assetsPath := filepath.Join(distPath, "assets")
-			if _, err := os.Stat(assetsPath); err == nil {
-				assetFiles, err := os.ReadDir(assetsPath)
-				if err == nil {
-					fmt.Println("Assets directory contents:")
-					for _, file := range assetFiles {
-						fmt.Println("- ", file.Name())
+		// Search locations - first look in temporary deployment, then in permanent Deployed folder
+		searchLocations := []struct {
+			baseDir string
+			project string
+		}{
+			// Temporary deployment
+			{"Deployed", cleanProjectName}, // Permanent storage
+		}
+
+		fmt.Println("Search locations:", searchLocations)
+
+		for _, loc := range searchLocations {
+			rootDir := filepath.Join(loc.baseDir, loc.project)
+			distPath := filepath.Join(rootDir, "dist")
+			if _, err := os.Stat(distPath); err == nil {
+
+				fmt.Printf("Found dist directory in %s\n", rootDir)
+				assetsPath := filepath.Join(distPath, "assets")
+
+				if _, err := os.Stat(assetsPath); err == nil {
+					assetFiles, err := os.ReadDir(assetsPath)
+					if err == nil {
+						fmt.Printf("Assets in %s:\n", assetsPath)
+						for _, file := range assetFiles {
+							fmt.Println("- ", file.Name())
+						}
 					}
 				}
 			}
 		}
 
 		if requestedPath == "/index.html" {
-			indexPath := findIndexHTML(projectRoot)
+			for _, loc := range searchLocations {
+				rootDir := filepath.Join(loc.baseDir, loc.project)
+				indexPath := findIndexHTML(rootDir)
+				if indexPath != "" {
+					fmt.Printf("Found index.html at %s\n", indexPath)
+					htmlContent, err := os.ReadFile(indexPath)
+					if err == nil {
+						// Modify HTML to fix asset paths
+						htmlString := string(htmlContent)
+
+						// Find assets directory and get JS/CSS files
+						var assetsDir string
+						var jsFile, cssFile string
+
+						// Check both potential asset locations
+						for _, loc := range searchLocations {
+							potentialAssetsDir := filepath.Join(loc.baseDir, loc.project, "dist", "assets")
+							if _, err := os.Stat(potentialAssetsDir); err == nil {
+								assetsDir = potentialAssetsDir
+								files, _ := os.ReadDir(assetsDir)
+								for _, file := range files {
+									if strings.HasSuffix(file.Name(), ".js") {
+										jsFile = file.Name()
+									}
+									if strings.HasSuffix(file.Name(), ".css") {
+										cssFile = file.Name()
+									}
+								}
+								// Use the first valid assets directory we find
+								if jsFile != "" || cssFile != "" {
+									break
+								}
+							}
+						}
+
+						if assetsDir != "" {
+							fmt.Printf("Using assets from: %s\n", assetsDir)
+
+							var projectPath string
+							if strings.HasPrefix(assetsDir, "Deployed") {
+								projectPath = fmt.Sprintf("/projects/%s", cleanProjectName)
+							} else {
+								projectPath = fmt.Sprintf("/projects/%s", project)
+							}
+
+							if jsFile != "" {
+								htmlString = strings.Replace(htmlString,
+									"/src/main.jsx",
+									fmt.Sprintf("%s/dist/assets/%s", projectPath, jsFile),
+									-1)
+
+								htmlString = strings.Replace(htmlString,
+									"src/main.jsx",
+									fmt.Sprintf("%s/dist/assets/%s", projectPath, jsFile),
+									-1)
+							}
+
+							if cssFile != "" {
+								htmlString = strings.Replace(htmlString,
+									"/src/index.css",
+									fmt.Sprintf("%s/dist/assets/%s", projectPath, cssFile),
+									-1)
+
+								htmlString = strings.Replace(htmlString,
+									"src/index.css",
+									fmt.Sprintf("%s/dist/assets/%s", projectPath, cssFile),
+									-1)
+							}
+
+							// Generic module source replacement
+							htmlString = strings.Replace(htmlString,
+								`type="module" src="/src/`,
+								fmt.Sprintf(`type="module" src="%s/dist/assets/`, projectPath),
+								-1)
+						}
+
+						c.Data(http.StatusOK, "text/html", []byte(htmlString))
+						return
+					}
+
+					c.File(indexPath)
+					return
+				}
+			}
+		}
+
+		if strings.HasPrefix(requestedPath, "/src/") {
+			if strings.HasSuffix(requestedPath, ".jsx") || strings.HasSuffix(requestedPath, ".tsx") {
+				for _, loc := range searchLocations {
+					rootDir := filepath.Join(loc.baseDir, loc.project)
+
+					assetsDir := filepath.Join(rootDir, "dist", "assets")
+
+					if _, err := os.Stat(assetsDir); err != nil {
+						for _, dir := range []string{"build", "public", "out", "_site"} {
+							possibleDir := filepath.Join(rootDir, dir, "assets")
+							if _, err := os.Stat(possibleDir); err == nil {
+								assetsDir = possibleDir
+								break
+							}
+
+							possibleDir = filepath.Join(rootDir, dir)
+							if _, err := os.Stat(possibleDir); err == nil {
+								assetsDir = possibleDir
+								break
+							}
+						}
+					}
+
+					// Look for JS files in the assets directory
+					files, err := os.ReadDir(assetsDir)
+					if err == nil {
+						for _, file := range files {
+							fileName := file.Name()
+							if strings.HasSuffix(fileName, ".js") &&
+								(strings.HasPrefix(fileName, "index-") || strings.HasPrefix(fileName, "main-")) {
+								fullPath := filepath.Join(assetsDir, fileName)
+								fmt.Println("Serving compiled JS bundle:", fullPath)
+								c.File(fullPath)
+								return
+							}
+						}
+
+						// If no specific file found, serve any JS file
+						for _, file := range files {
+							if strings.HasSuffix(file.Name(), ".js") {
+								fullPath := filepath.Join(assetsDir, file.Name())
+								fmt.Println("Serving fallback JS file:", fullPath)
+								c.File(fullPath)
+								return
+							}
+						}
+					}
+				}
+			}
+
+			// For CSS, SVG and other assets
+			if strings.HasSuffix(requestedPath, ".css") || strings.HasSuffix(requestedPath, ".svg") {
+				ext := filepath.Ext(requestedPath)
+
+				for _, loc := range searchLocations {
+					rootDir := filepath.Join(loc.baseDir, loc.project)
+					assetsDir := filepath.Join(rootDir, "dist", "assets")
+
+					if _, err := os.Stat(assetsDir); err == nil {
+						files, err := os.ReadDir(assetsDir)
+						if err == nil {
+							for _, file := range files {
+								if strings.HasSuffix(file.Name(), ext) {
+									fullPath := filepath.Join(assetsDir, file.Name())
+									fmt.Println("Serving asset:", fullPath)
+									c.File(fullPath)
+									return
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Try the source path as a fallback
+			for _, loc := range searchLocations {
+				srcPath := filepath.Join(loc.baseDir, loc.project, requestedPath[1:])
+				if _, err := os.Stat(srcPath); err == nil {
+					c.File(srcPath)
+					return
+				}
+			}
+		}
+
+		// Check common build directories in all search locations
+		buildDirs := []string{"dist", "build", "public", "out", "_site", ""}
+
+		for _, loc := range searchLocations {
+			rootDir := filepath.Join(loc.baseDir, loc.project)
+
+			for _, dir := range buildDirs {
+				var testPath string
+				if dir != "" {
+					testPath = filepath.Join(rootDir, dir, requestedPath)
+				} else {
+					testPath = filepath.Join(rootDir, requestedPath)
+				}
+
+				if _, err := os.Stat(testPath); err == nil {
+					c.File(testPath)
+					return
+				}
+			}
+		}
+
+		// Handle asset files with hashed filenames
+		if strings.HasSuffix(requestedPath, ".js") ||
+			strings.HasSuffix(requestedPath, ".css") ||
+			strings.HasSuffix(requestedPath, ".png") ||
+			strings.HasSuffix(requestedPath, ".jpg") ||
+			strings.HasSuffix(requestedPath, ".svg") ||
+			strings.HasSuffix(requestedPath, ".ico") {
+
+			dir := filepath.Dir(requestedPath)
+			base := filepath.Base(requestedPath)
+			ext := filepath.Ext(requestedPath)
+			prefix := strings.TrimSuffix(base, ext)
+
+			for _, loc := range searchLocations {
+				rootDir := filepath.Join(loc.baseDir, loc.project)
+
+				for _, buildDir := range buildDirs {
+					var assetDir string
+					if buildDir != "" {
+						assetDir = filepath.Join(rootDir, buildDir, dir)
+					} else {
+						assetDir = filepath.Join(rootDir, dir)
+					}
+
+					// Try to find files with the same extension and prefix
+					files, err := os.ReadDir(assetDir)
+					if err == nil {
+						for _, file := range files {
+							if !file.IsDir() &&
+								strings.HasPrefix(file.Name(), prefix) &&
+								strings.HasSuffix(file.Name(), ext) {
+								c.File(filepath.Join(assetDir, file.Name()))
+								return
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Try specific assets directories for different build tools
+		for _, loc := range searchLocations {
+			rootDir := filepath.Join(loc.baseDir, loc.project)
+
+			assetDirs := []string{
+				filepath.Join(rootDir, "dist", "assets"),
+				filepath.Join(rootDir, "build", "static"),
+				filepath.Join(rootDir, "out", "_next"),
+			}
+
+			for _, assetsDir := range assetDirs {
+				if _, err := os.Stat(assetsDir); err == nil {
+					files, err := os.ReadDir(assetsDir)
+					if err == nil && len(files) > 0 {
+						// Match file type with any available asset
+						var targetExt string
+						if strings.HasSuffix(requestedPath, ".js") ||
+							strings.HasSuffix(requestedPath, ".jsx") {
+							targetExt = ".js"
+						} else if strings.HasSuffix(requestedPath, ".css") {
+							targetExt = ".css"
+						} else if strings.HasSuffix(requestedPath, ".svg") ||
+							strings.HasSuffix(requestedPath, ".png") {
+							targetExt = filepath.Ext(requestedPath)
+						}
+
+						if targetExt != "" {
+							for _, file := range files {
+								if strings.HasSuffix(file.Name(), targetExt) {
+									c.File(filepath.Join(assetsDir, file.Name()))
+									return
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if !strings.Contains(filepath.Base(requestedPath), ".") {
+			for _, loc := range searchLocations {
+				rootDir := filepath.Join(loc.baseDir, loc.project)
+				indexPath := findIndexHTML(rootDir)
+				if indexPath != "" {
+					fmt.Println("Serving SPA fallback:", indexPath)
+					c.File(indexPath)
+					return
+				}
+			}
+		}
+
+		c.String(http.StatusNotFound, "File not found: %s", requestedPath)
+	})
+
+	// r.GET("/projects/:projectName", func(c *gin.Context) {
+	// 	project := c.Param("projectName")
+	// 	cleanProjectName := strings.Split(project, "-")[0]
+
+	// 	searchLocations := []struct {
+	// 		baseDir string
+	// 		project string
+	// 	}{
+
+	// 		{"Deployed", cleanProjectName},
+	// 	}
+	// 	fmt.Println("Search locations:", searchLocations)
+	// 	fmt.Println("Project name:", cleanProjectName)
+	// 	for _, loc := range searchLocations {
+	// 		rootDir := filepath.Join(loc.baseDir, loc.project)
+	// 		fmt.Println("Root directory:", rootDir)
+	// 		indexPath := findIndexHTML(rootDir)
+
+	// 		fmt.Println("Index path:", indexPath)
+	// 		if indexPath != "" {
+	// 			c.File(indexPath)
+	// 			return
+	// 		}
+	// 	}
+
+	// 	c.String(http.StatusNotFound, "Project not found")
+	// })
+	r.GET("/projects/:projectName", func(c *gin.Context) {
+		project := c.Param("projectName")
+		cleanProjectName := strings.Split(project, "-")[0]
+
+		searchLocations := []struct {
+			baseDir string
+			project string
+		}{
+			{"Deployed", cleanProjectName},
+		}
+
+		fmt.Println("Search locations:", searchLocations)
+		fmt.Println("Project name:", cleanProjectName)
+
+		for _, loc := range searchLocations {
+			rootDir := filepath.Join(loc.baseDir, loc.project)
+			fmt.Println("Root directory:", rootDir)
+			indexPath := findIndexHTML(rootDir)
+
+			fmt.Println("Index path:", indexPath)
 			if indexPath != "" {
+
 				htmlContent, err := os.ReadFile(indexPath)
 				if err == nil {
 					htmlString := string(htmlContent)
 
-					assetsDir := filepath.Join(projectRoot, "dist/assets")
+					assetsDir := filepath.Join(rootDir, "dist", "assets")
 					if _, err := os.Stat(assetsDir); err == nil {
 						files, _ := os.ReadDir(assetsDir)
 						var jsFile, cssFile string
@@ -163,257 +506,47 @@ func main() {
 							}
 						}
 
+						projectPath := fmt.Sprintf("projects/%s", cleanProjectName)
+
 						if jsFile != "" {
 							htmlString = strings.Replace(htmlString,
-								"/src/main.jsx",
-								fmt.Sprintf("/projects/%s/dist/assets/%s", project, jsFile),
+								fmt.Sprintf("assets/%s", jsFile),
+								fmt.Sprintf("%s/dist/assets/%s", projectPath, jsFile),
 								-1)
 
-							htmlString = strings.Replace(htmlString,
-								"src/main.jsx",
-								fmt.Sprintf("/projects/%s/dist/assets/%s", project, jsFile),
-								-1)
 						}
 
 						if cssFile != "" {
 							htmlString = strings.Replace(htmlString,
-								"/src/index.css",
-								fmt.Sprintf("/projects/%s/dist/assets/%s", project, cssFile),
+								fmt.Sprintf("assets/%s", cssFile),
+								fmt.Sprintf("%s/dist/assets/%s", projectPath, cssFile),
 								-1)
 
-							htmlString = strings.Replace(htmlString,
-								"src/index.css",
-								fmt.Sprintf("/projects/%s/dist/assets/%s", project, cssFile),
-								-1)
 						}
+
+						htmlString = strings.Replace(htmlString,
+							`type="module" src="/src/`,
+							fmt.Sprintf(`type="module" src="%s/dist/assets/`, projectPath),
+							-1)
+
 					}
 
-					htmlString = strings.Replace(htmlString,
-						`type="module" src="/src/`,
-						fmt.Sprintf(`type="module" src="/projects/%s/dist/assets/`, project),
-						-1)
+					// Log the modified HTML for debugging
+					fmt.Println("Modified HTML:", htmlString)
 
+					// Serve the fixed HTML
 					c.Data(http.StatusOK, "text/html", []byte(htmlString))
 					return
-				}
-
-				c.File(indexPath)
-				return
-			}
-		}
-
-		if strings.HasPrefix(requestedPath, "/src/") {
-			// For .jsx files, we need to serve the main JS bundle
-			if strings.HasSuffix(requestedPath, ".jsx") || strings.HasSuffix(requestedPath, ".tsx") {
-				// Find and serve the main JS bundle from dist/assets
-				assetsDir := filepath.Join(deploymentRootDir, project, "dist", "assets")
-
-				// If that specific directory doesn't exist, try to find any assets directory
-				if _, err := os.Stat(assetsDir); err != nil {
-					// Try other common build directories
-					for _, dir := range []string{"build", "public", "out", "_site"} {
-						possibleDir := filepath.Join(deploymentRootDir, project, dir, "assets")
-						if _, err := os.Stat(possibleDir); err == nil {
-							assetsDir = possibleDir
-							break
-						}
-
-						// Also check for just the build dir with no assets subdirectory
-						possibleDir = filepath.Join(deploymentRootDir, project, dir)
-						if _, err := os.Stat(possibleDir); err == nil {
-							assetsDir = possibleDir
-							break
-						}
-					}
-				}
-
-				// Now that we have an assets directory (hopefully), look for JS files
-				files, err := os.ReadDir(assetsDir)
-				if err == nil {
-					// Look for index or main JS files first
-					for _, file := range files {
-						fileName := file.Name()
-						if strings.HasSuffix(fileName, ".js") &&
-							(strings.HasPrefix(fileName, "index-") || strings.HasPrefix(fileName, "main-")) {
-							fullPath := filepath.Join(assetsDir, fileName)
-							fmt.Println("Serving compiled JS bundle:", fullPath)
-							c.File(fullPath)
-							return
-						}
-					}
-
-					// If no index/main file found, serve any JS file
-					for _, file := range files {
-						if strings.HasSuffix(file.Name(), ".js") {
-							fullPath := filepath.Join(assetsDir, file.Name())
-							fmt.Println("Serving fallback JS file:", fullPath)
-							c.File(fullPath)
-							return
-						}
-					}
-				}
-			}
-
-			// For CSS, SVG and other assets
-			if strings.HasSuffix(requestedPath, ".css") ||
-				strings.HasSuffix(requestedPath, ".svg") {
-
-				assetsDir := filepath.Join(deploymentRootDir, project, "dist", "assets")
-				if _, err := os.Stat(assetsDir); err == nil {
-					ext := filepath.Ext(requestedPath)
-					files, err := os.ReadDir(assetsDir)
-					if err == nil {
-						for _, file := range files {
-							if strings.HasSuffix(file.Name(), ext) {
-								fullPath := filepath.Join(assetsDir, file.Name())
-								fmt.Println("Serving asset:", fullPath)
-								c.File(fullPath)
-								return
-							}
-						}
-					}
-				}
-			}
-
-			// Try the source path as a fallback
-			srcPath := filepath.Join(deploymentRootDir, project, requestedPath[1:])
-			if _, err := os.Stat(srcPath); err == nil {
-				c.File(srcPath)
-				return
-			}
-		}
-
-		// Check common build directories first
-		buildDirs := []string{"dist", "build", "public", "out", "_site", ""}
-		var fullPath string
-		var found bool
-
-		for _, dir := range buildDirs {
-			var testPath string
-			if dir != "" {
-				testPath = filepath.Join(deploymentRootDir, project, dir, requestedPath)
-			} else {
-				testPath = filepath.Join(deploymentRootDir, project, requestedPath)
-			}
-
-			if _, err := os.Stat(testPath); err == nil {
-				fullPath = testPath
-				found = true
-				break
-			}
-		}
-
-		if !found && (strings.HasSuffix(requestedPath, ".js") || strings.HasSuffix(requestedPath, ".css") ||
-			strings.HasSuffix(requestedPath, ".png") || strings.HasSuffix(requestedPath, ".jpg") ||
-			strings.HasSuffix(requestedPath, ".svg") || strings.HasSuffix(requestedPath, ".ico")) {
-
-			// For asset files that aren't found, check if they have a hash in the filename
-			dir := filepath.Dir(requestedPath)
-			base := filepath.Base(requestedPath)
-			ext := filepath.Ext(requestedPath)
-			prefix := strings.TrimSuffix(base, ext)
-
-			// Look in each build directory
-			for _, buildDir := range buildDirs {
-				var assetDir string
-				if buildDir != "" {
-					assetDir = filepath.Join(deploymentRootDir, project, buildDir, dir)
 				} else {
-					assetDir = filepath.Join(deploymentRootDir, project, dir)
-				}
-
-				// Try to find files with the same extension and prefix
-				files, err := os.ReadDir(assetDir)
-				if err == nil {
-					for _, file := range files {
-						if !file.IsDir() && strings.HasPrefix(file.Name(), prefix) && strings.HasSuffix(file.Name(), ext) {
-							fullPath = filepath.Join(assetDir, file.Name())
-							found = true
-							break
-						}
-					}
-				}
-				if found {
-					break
-				}
-			}
-		}
-
-		if !found {
-			// Try specific assets directories for different build tools
-			assetDirs := []string{
-				filepath.Join(deploymentRootDir, project, "dist", "assets"),
-				filepath.Join(deploymentRootDir, project, "build", "static"),
-				filepath.Join(deploymentRootDir, project, "out", "_next"),
-			}
-
-			for _, assetsDir := range assetDirs {
-				if _, err := os.Stat(assetsDir); err == nil {
-					files, err := os.ReadDir(assetsDir)
-					if err == nil && len(files) > 0 {
-						// If we're looking for a JS file
-						if strings.HasSuffix(requestedPath, ".js") || strings.HasSuffix(requestedPath, ".jsx") {
-							for _, file := range files {
-								if strings.HasSuffix(file.Name(), ".js") {
-									c.File(filepath.Join(assetsDir, file.Name()))
-									return
-								}
-							}
-						}
-
-						// If we're looking for a CSS file
-						if strings.HasSuffix(requestedPath, ".css") {
-							for _, file := range files {
-								if strings.HasSuffix(file.Name(), ".css") {
-									c.File(filepath.Join(assetsDir, file.Name()))
-									return
-								}
-							}
-						}
-
-						if strings.HasSuffix(requestedPath, ".svg") || strings.HasSuffix(requestedPath, ".png") {
-							for _, file := range files {
-								if strings.HasSuffix(file.Name(), filepath.Ext(requestedPath)) {
-									c.File(filepath.Join(assetsDir, file.Name()))
-									return
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// SPA routing support - serve index.html for paths that don't match files
-			if !strings.Contains(filepath.Base(requestedPath), ".") {
-				indexPath := findIndexHTML(filepath.Join(deploymentRootDir, project))
-				if indexPath != "" {
-					fmt.Println("Serving SPA fallback:", indexPath)
+					fmt.Println("Error reading index.html:", err)
 					c.File(indexPath)
 					return
 				}
 			}
-
-			c.String(http.StatusNotFound, "File not found: %s", requestedPath)
-			return
-		}
-
-		c.File(fullPath)
-	})
-	r.GET("/projects/:projectName", func(c *gin.Context) {
-		project := c.Param("projectName")
-		projectRoot := filepath.Join(deploymentRootDir, project)
-
-		indexPath := findIndexHTML(projectRoot)
-
-		if indexPath != "" {
-			c.File(indexPath)
-			return
 		}
 
 		c.String(http.StatusNotFound, "Project not found")
 	})
-
-	// Catch all unmatched routes
 	r.NoRoute(func(c *gin.Context) {
 		c.String(http.StatusNotFound, "404 Not Found: %s", c.Request.URL.Path)
 	})
@@ -421,14 +554,6 @@ func main() {
 	r.Run(":8000")
 }
 
-// Helper function to find index.html in a directory
-//
-//	func findIndexHTML(dir string) string {
-//		// Check at root level
-//		indexPath := filepath.Join(dir, "index.html")
-//		if _, err := os.Stat(indexPath); err == nil {
-//			return indexPath
-//		}
 func findIndexHTML(dir string) string {
 
 	indexPath := filepath.Join(dir, "index.html")
@@ -440,7 +565,9 @@ func findIndexHTML(dir string) string {
 	buildDirs := []string{"dist", "build", "public", "out", "_site"}
 	for _, buildDir := range buildDirs {
 		indexPath := filepath.Join(dir, buildDir, "index.html")
+
 		if _, err := os.Stat(indexPath); err == nil {
+
 			return indexPath
 		}
 	}
@@ -459,12 +586,6 @@ func findIndexHTML(dir string) string {
 
 			nestedDir := filepath.Join(dir, entry.Name())
 
-			//indexPath := filepath.Join(nestedDir, "index.html")
-			// if _, err := os.Stat(indexPath); err == nil {
-			// 	return indexPath
-			// }
-
-			// Check common build directories in the nested directory
 			for _, buildDir := range buildDirs {
 				indexPath := filepath.Join(nestedDir, buildDir, "index.html")
 				if _, err := os.Stat(indexPath); err == nil {
@@ -478,50 +599,6 @@ func findIndexHTML(dir string) string {
 	return ""
 }
 
-// 	// Check common build directories
-// 	buildDirs := []string{"dist", "build", "public", "out", "_site"}
-// 	for _, buildDir := range buildDirs {
-// 		indexPath := filepath.Join(dir, buildDir, "index.html")
-// 		if _, err := os.Stat(indexPath); err == nil {
-// 			return indexPath
-// 		}
-// 	}
-
-// 	// Look one level deeper in case the project is nested
-// 	entries, err := os.ReadDir(dir)
-// 	if err != nil {
-// 		return ""
-// 	}
-
-// 	for _, entry := range entries {
-// 		if entry.IsDir() {
-// 			// Skip common non-project directories
-// 			if entry.Name() == "node_modules" || entry.Name() == ".git" {
-// 				continue
-// 			}
-
-// 			nestedDir := filepath.Join(dir, entry.Name())
-
-// 			// Check index.html directly
-// 			indexPath := filepath.Join(nestedDir, "index.html")
-// 			if _, err := os.Stat(indexPath); err == nil {
-// 				return indexPath
-// 			}
-
-// 			// Check common build directories in the nested directory
-// 			for _, buildDir := range buildDirs {
-// 				indexPath := filepath.Join(nestedDir, buildDir, "index.html")
-// 				if _, err := os.Stat(indexPath); err == nil {
-// 					return indexPath
-// 				}
-// 			}
-// 		}
-// 	}
-
-// 	return ""
-// }
-
-// Helper function to clean up project names for display
 func cleanProjectName(name string) string {
 	// Strip timestamp from project name if present (e.g., "project-1234567890" -> "project")
 	parts := strings.Split(name, "-")

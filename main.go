@@ -31,10 +31,7 @@ import (
 //
 //		bio()
 //	}
-func greet(name string) {
 
-	fmt.Println("Hellow ", name)
-}
 func age_checker(age int) {
 	if age >= 60 {
 		fmt.Println("You are Senior ")
@@ -51,11 +48,7 @@ func test() {
 	fmt.Scanln(&name)
 	fmt.Println(name)
 }
-func say_hellow(itr int) {
-	for range itr {
-		fmt.Println("Hellow there ")
-	}
-}
+
 func slice_sum() {
 	fmt.Println("Enter numbers want to add")
 	var num int

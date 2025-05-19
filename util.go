@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -158,35 +157,28 @@ func ParseToken(tokenStr string) (string, error) {
 	return claims["user_id"].(string), nil
 }
 
-func Handlerefrer() gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		refer := ctx.Request.Referer()
-		fmt.Println("this is refer : ==================> ", refer)
-		currentPath := ctx.Request.URL.String()
-		fmt.Println("current path +>>>>>>>>>>>>>>>>>>>>>", currentPath)
-		matched, err := regexp.MatchString(`^http://localhost:8000/projects/[^/]+$`, refer)
-		if err != nil {
-			fmt.Println("regex error ", err)
-			ctx.Next()
-			return
-		}
-		tem := strings.HasPrefix(currentPath, "/assets")
-		if matched && tem {
+// func Handlerefrer() gin.HandlerFunc {
+// 	return func(ctx *gin.Context) {
+// 		refer := ctx.Request.Referer()
+// 		currentPath := ctx.Request.URL.String()
+// 		matched, err := regexp.MatchString(`^http://localhost:8000/projects/[^/]+$`, refer)
+// 		if err != nil {
+// 			fmt.Println("regex error ", err)
+// 			ctx.Next()
+// 			return
+// 		}
+// 		tem := strings.HasPrefix(currentPath, "/assets")
+// 		if matched && tem {
 
-			println("matched ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-			ctx.Redirect(http.StatusFound, refer+currentPath)
-			ctx.Abort()
+// 			ctx.Redirect(http.StatusFound, refer+currentPath)
+// 			ctx.Abort()
 
-			return
-		}
-		// if regexp.MustCompile(`^http://localhost:8000/projects/[^/]+$`).MatchString(refer) {
-		// 	fmt.Println("it is for redirection !!!!!!")
+// 			return
+// 		}
 
-		// 	ctx.Redirect(http.StatusOK, tem)
-		// }
-		ctx.Next()
-	}
-}
+// 		ctx.Next()
+// 	}
+// }
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -376,9 +368,116 @@ func isStaticSite(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, "index.html"))
 	return err == nil
 }
+func copyDirectory(source, target string) error {
+	// Create the target directory if it doesn't exist
+	if err := os.MkdirAll(target, 0755); err != nil {
+		return err
+	}
 
+	// Read the directory
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		sourcePath := filepath.Join(source, entry.Name())
+		targetPath := filepath.Join(target, entry.Name())
+
+		if entry.IsDir() {
+			// Recursively copy subdirectories
+			if err := copyDirectory(sourcePath, targetPath); err != nil {
+				return err
+			}
+		} else {
+			// Copy files
+			content, err := os.ReadFile(sourcePath)
+			if err != nil {
+				return err
+			}
+
+			if err := os.WriteFile(targetPath, content, 0644); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+func add_to_deployed_folder(sourceDir, projectName string) error {
+	cleanProjectName := strings.Split(projectName, "-")[0]
+
+	deployedDir := "Deployed"
+	if err := os.MkdirAll(deployedDir, 0755); err != nil {
+		return fmt.Errorf("failed to create Deployed directory: %v", err)
+	}
+
+	projectDir := filepath.Join(deployedDir, cleanProjectName)
+
+	if _, err := os.Stat(projectDir); err == nil {
+		if err := os.RemoveAll(projectDir); err != nil {
+			return fmt.Errorf("failed to clean existing project directory: %v", err)
+		}
+	}
+
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		return fmt.Errorf("failed to create project directory: %v", err)
+	}
+
+	// Check common build directories
+	buildDirs := []string{"dist", "build", "public", "out", "_site"}
+	var buildDir string
+	var sourceBuildDir string
+
+	for _, dir := range buildDirs {
+		path := filepath.Join(sourceDir, dir)
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			buildDir = dir
+			sourceBuildDir = path
+			fmt.Printf("Found build directory: %s\n", buildDir)
+			break
+		}
+	}
+
+	if buildDir == "" {
+		// If no build directory found, copy the whole source directory
+		fmt.Println("No specific build directory found, copying entire source directory")
+		if err := copyDirectory(sourceDir, projectDir); err != nil {
+			return fmt.Errorf("failed to copy source directory: %v", err)
+		}
+	} else {
+		// Create the build directory in the project directory
+		targetDir := filepath.Join(projectDir, buildDir)
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			return fmt.Errorf("failed to create build directory: %v", err)
+		}
+
+		// Copy build files
+		if err := copyDirectory(sourceBuildDir, targetDir); err != nil {
+			return fmt.Errorf("failed to copy build directory: %v", err)
+		}
+	}
+
+	fmt.Printf("Successfully copied from %s to %s\n", sourceDir, projectDir)
+
+	// Remove the original deployment directory after a delay
+	// to ensure ongoing requests can complete
+	go func() {
+		time.Sleep(10 * time.Second)
+		fmt.Printf("Removing temporary deployment directory: %s\n", sourceDir)
+		if err := os.RemoveAll(sourceDir); err != nil {
+			fmt.Printf("Warning: Failed to clean up deployment directory: %v\n", err)
+		} else {
+			fmt.Printf("Successfully removed temporary deployment directory\n")
+		}
+	}()
+
+	return nil
+}
 func deployNodeApp(repoDir, deploymentID string) (string, error) {
-	// Install dependencies
+	// Extract the project name from the deployment ID
+	projectName := filepath.Base(repoDir)
+
 	installCmd := exec.Command("npm", "install")
 	installCmd.Dir = repoDir
 	fmt.Println("Installing npm dependencies...")
@@ -386,14 +485,13 @@ func deployNodeApp(repoDir, deploymentID string) (string, error) {
 		return "", fmt.Errorf("npm install failed: %v", err)
 	}
 
-	// Build the application
 	buildCmd := exec.Command("npm", "run", "build")
 	buildCmd.Dir = repoDir
 	fmt.Println("Building project...")
 	buildOutput, _ := buildCmd.CombinedOutput()
 	fmt.Println("Build output:", string(buildOutput))
 
-	// Even if build fails, we'll try to find a deployable directory
+	// Find build directory
 	buildDirs := []string{"dist", "build", "public", "out", "_site"}
 	var buildDir string
 	for _, dir := range buildDirs {
@@ -405,43 +503,18 @@ func deployNodeApp(repoDir, deploymentID string) (string, error) {
 		}
 	}
 
-	// If no build directory was found, we'll treat the repo root as the deployable directory
-	if buildDir == "" {
-		fmt.Println("No build directory found, using repository root")
-		// Check if there's an index.html file at the root level
-		indexPath := filepath.Join(repoDir, "index.html")
-		if _, err := os.Stat(indexPath); err != nil {
-			fmt.Println("Warning: No index.html found at root level")
-		}
+	// Move files to Deployed folder and clean up
+	err := add_to_deployed_folder(repoDir, projectName)
+	if err != nil {
+		fmt.Printf("Warning: Failed to move to Deployed folder: %v\n", err)
+		// Continue anyway since this is not critical
 	}
 
 	// Return the URL where the project will be accessible
-	return fmt.Sprintf("http://localhost:8000/projects/%s", deploymentID), nil
+	// Using the clean project name (without timestamp)
+	cleanProjectName := strings.Split(projectName, "-")[0]
+	return fmt.Sprintf("http://localhost:8000/projects/%s", cleanProjectName), nil
 }
-
-// 	port := 3000 + (time.Now().Unix() % 1000)
-// 	buildCmd := exec.Command("npm", "run", "build")
-// 	buildCmd.Dir = repoDir
-// 	if err := buildCmd.Run(); err != nil {
-
-// 		startCmd := exec.Command("npm", "start")
-// 		startCmd.Dir = repoDir
-// 		startCmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port))
-// 		if err := startCmd.Start(); err != nil {
-// 			return "", err
-// 		}
-// 	} else {
-// 		// Serve the built files
-// 		serveCmd := exec.Command("npx", "serve", "-s", "build", "-l", fmt.Sprintf("%d", port))
-// 		serveCmd.Dir = repoDir
-// 		if err := serveCmd.Start(); err != nil {
-// 			return "", err
-// 		}
-// 	}
-
-// 	return fmt.Sprintf("http://localhost:%d", port), nil
-// }
-
 func deployGoApp(repoDir, deploymentID string) (string, error) {
 	buildCmd := exec.Command("go", "build", "-o", deploymentID)
 	buildCmd.Dir = repoDir
