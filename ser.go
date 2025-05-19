@@ -19,8 +19,8 @@ import (
 var (
 	jwtKey            = []byte("supersecretkey")
 	githubOauthConfig = &oauth2.Config{
-		ClientID:     "Iv23ctotRij7SyaLQ3lZ",
-		ClientSecret: "c022f6f74cbad6f19b239f30c8dfeac2726b21b7",
+		ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
+		ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
 		Scopes:       []string{"repo"},
 		Endpoint:     ghoauth.Endpoint,
 		RedirectURL:  "http://localhost:8000/github/callback",
