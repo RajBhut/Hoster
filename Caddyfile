@@ -1,0 +1,9 @@
+{
+    admin localhost:2019
+    auto_https off
+}
+*.hoster.localhost{
+    respond "Not Configured" 404
+}
+
+

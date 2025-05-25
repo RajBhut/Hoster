@@ -1,0 +1,95 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":80"],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "file_server",
+                          "root": "Deployed/Paster/dist"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "rewrite",
+                          "uri": "/index.html"
+                        }
+                      ],
+                      "match": [
+                        {
+                          "not": [
+                            {
+                              "file": {
+                                "try_files": ["{http.request.uri.path}"]
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": ["Paster.hoster.localhost"]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "file_server",
+                          "root": "Deployed/Brain/dist"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "rewrite",
+                          "uri": "/index.html"
+                        }
+                      ],
+                      "match": [
+                        {
+                          "not": [
+                            {
+                              "file": {
+                                "try_files": ["{http.request.uri.path}"]
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": ["Brain.hoster.localhost"]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
